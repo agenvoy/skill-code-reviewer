@@ -8,6 +8,7 @@ Supports: Go, Python, JavaScript/TypeScript, PHP
 import json
 import os
 import re
+import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -111,6 +112,19 @@ COMMAND_INJECTION_PATTERNS = [
     r'(?:exec|system|popen)\s*\([^)]*\$',
     r'exec\.Command\s*\([^)]*\+',
 ]
+
+
+def run_gofmt(file_path: Path) -> bool:
+    """Run gofmt -s -w on a Go file. Returns True if successful."""
+    try:
+        result = subprocess.run(
+            ["gofmt", "-s", "-w", str(file_path)],
+            capture_output=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
 
 
 def detect_language(root: Path) -> str:
@@ -372,6 +386,8 @@ def analyze_go(root: Path) -> ProjectAnalysis:
 
         rel_path = str(go_file.relative_to(root))
         analysis.files.append(rel_path)
+
+        run_gofmt(go_file)
 
         try:
             content = go_file.read_text()
