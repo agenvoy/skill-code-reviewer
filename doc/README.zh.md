@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-<a href="https://github.com/agenvoy/skill-code-reviewer/releases"><img src="https://img.shields.io/github/license/agenvoy/skill-code-reviewer?include_prereleases&style=for-the-badge" alt="License"></a>
+<a href="../LICENSE"><img src="https://img.shields.io/github/license/agenvoy/skill-code-reviewer?include_prereleases&style=for-the-badge" alt="License"></a>
 </p>
 
 ***
