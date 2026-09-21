@@ -2,136 +2,104 @@
 
 > 返回 [README](./README.zh.md)
 
-## Overview
+## 概覽
 
 ```mermaid
 graph TB
-    User[使用者] -->|/code-reviewer PROJECT_PATH OUTPUT_FILE| SKILL[SKILL.md<br/>Orchestration]
-    SKILL --> Entry[analyze_code.py<br/>語言偵測 + 分派]
-    Entry -->|go| Go[analyze_go.py]
-    Entry -->|python| Py[analyze_python.py]
-    Entry -->|js/ts| JS[analyze_js_ts.py]
-    Go --> AST[go_ast.go<br/>go run 執行]
-    Go --> Common[common.py<br/>共用偵測器]
+    User[使用者呼叫 /code-reviewer] --> Skill[SKILL.md<br/>流程協調]
+    Skill --> Entry[analyze_code.py<br/>語言偵測與派送]
+    Entry --> Go[analyze_go.py<br/>+ go_ast.go]
+    Entry --> Py[analyze_python.py]
+    Entry --> JS[analyze_js_ts.py]
+    Go --> Common[common.py<br/>資料類別與安全偵測]
     Py --> Common
     JS --> Common
-    JS --> ESLint[專案本地 eslint<br/>可選]
-    AST --> Result[ProjectAnalysis JSON]
-    Common --> Result
-    ESLint --> Result
-    Result --> Gate[No-Op 閘門]
-    Gate -->|命中| Notice[輸出「無需處理」訊息]
-    Gate -->|未命中| Report[.doc/code-reviewer/<br/>優化建議報告]
+    Entry --> JSON[分析結果 JSON]
+    JSON --> Eval[Evaluate<br/>analysis_categories.md]
+    Rules[CLAUDE.md / AGENTS.md] --> Eval
+    Eval --> Validate[Validation Pass]
+    Validate --> Gate{No-Op?}
+    Gate -->|是| Msg[一行無需處理訊息]
+    Gate -->|否| Gen[Generate<br/>recommendation_principles.md]
+    Gen --> Save[Save<br/>output_format.md]
+    Save --> Report[.doc/code-reviewer/報告]
 ```
 
-## Module: SKILL.md（Orchestration）
+## Module: SKILL.md（流程協調）
 
-定義 Detect → Analyze → Evaluate → Gate → Generate → Save 六階段流程與驗證清單，不含可執行程式碼，透過 prompt 指令約束 Claude 的行為。
+定義參數、七步工作流程、Validation Pass、規範遵循範圍、No-Op 條件與驗證清單；分析器路徑以 `{skill_dir}` 表示，依實際載入位置代入。
+
+```mermaid
+graph LR
+    subgraph Workflow[SKILL.md]
+        W1[1 Detect] --> W2[2 Analyze]
+        W2 --> W3[3 Evaluate]
+        W3 --> W4[4 Validate]
+        W4 --> W5[5 Gate]
+        W5 --> W6[6 Generate]
+        W6 --> W7[7 Save]
+    end
+```
+
+## Module: analyze_code.py（入口）
 
 ```mermaid
 graph TB
-    subgraph SKILL["SKILL.md"]
-        Detect[1. Detect<br/>偵測主要語言] --> Analyze[2. Analyze<br/>呼叫對應分析器]
-        Analyze --> Evaluate[3. Evaluate<br/>計算指標並排序問題]
-        Evaluate --> Gate[4. Gate<br/>檢查 No-Op 條件]
-        Gate -->|命中| Skip[跳過 Generate/Save<br/>輸出無需處理訊息]
-        Gate -->|未命中| Generate[5. Generate<br/>套用 Recommendation Principles]
-        Generate --> Save[6. Save<br/>mkdir -p + 寫入報告]
+    subgraph Entry[analyze_code.py]
+        M[main] --> P{路徑存在?}
+        P -->|否| Err[輸出 error JSON]
+        P -->|是| D[detect_language<br/>指標檔 → 副檔名計數]
+        D --> X[_dispatch]
+        X -->|go| G[analyze_go.analyze]
+        X -->|python| Y[analyze_python.analyze]
+        X -->|javascript / typescript| J[analyze_js_ts.analyze]
+        X -->|其他| U[不支援的語言 Low 問題]
+        G --> B[_build_output<br/>依嚴重度排序 + 計數]
+        Y --> B
+        J --> B
+        U --> B
     end
-    SlashCmd[/code-reviewer/] --> SKILL
+    B --> Out[stdout JSON]
 ```
 
-## Module: analyze_code.py（進入點 + 分派）
-
-偵測專案主要語言後，分派給對應分析器；統一組裝 `issue_counts`、排序 `issues`，輸出單一 JSON。
+## Module: 語言分析器
 
 ```mermaid
 graph TB
-    subgraph Entry["analyze_code.py"]
-        Main[main] --> Detect[detect_language<br/>go.mod / tsconfig.json /<br/>package.json / pyproject.toml]
-        Detect --> Dispatch[_dispatch]
-        Dispatch -->|go| GoAnalyzer[analyze_go.analyze]
-        Dispatch -->|python| PyAnalyzer[analyze_python.analyze]
-        Dispatch -->|js/ts| JSAnalyzer[analyze_js_ts.analyze]
-        Dispatch -->|其他| Unsupported[不支援語言<br/>Issue: low]
-        GoAnalyzer --> Build[_build_output<br/>排序 + 計數]
-        PyAnalyzer --> Build
-        JSAnalyzer --> Build
-        Unsupported --> Build
-        Build --> Stdout[stdout JSON]
+    subgraph GoA[analyze_go.py]
+        G1[逐檔 gofmt -s -w] --> G2[字串掃描]
+        G3[go run go_ast.go] --> G4{成功?}
+        G4 -->|是| G5[合併函式與 AST 問題<br/>附原始碼片段]
+        G4 -->|否| G6[標註僅字串掃描]
+        G7[解析 go.mod 相依]
+    end
+    subgraph PyA[analyze_python.py]
+        P1[ast.parse] --> P2[函式長度 / 巢狀 / 未使用 import]
+        P1 --> P3[bare except]
+        P4[字串掃描]
+    end
+    subgraph JSA[analyze_js_ts.py]
+        J1[去除字串與註解] --> J2[大括號結構掃描<br/>函式邊界 / 巢狀]
+        J3{有專案 eslint?} -->|是| J4[eslint --format json<br/>映射嚴重度]
+        J5[字串掃描]
     end
 ```
 
-## Module: analyze_go.py + go_ast.go（Go 分析器）
-
-`analyze_go.py` 負責 `gofmt` 前處理、`go.mod` 解析與字串模式掃描（憑證／SQL／指令注入／連續註解），並呼叫 `go_ast.go`（獨立 Go 程式，透過 `go run` 執行）取得函式簽章、未使用 import、`interface{}` 偵測、丟棄回傳值等需要真正 AST 的結果，再合併為單一 `ProjectAnalysis`。
+## Module: common.py（共用資料與安全偵測）
 
 ```mermaid
 graph TB
-    subgraph GoPy["analyze_go.py"]
-        Analyze[analyze] --> GoMod[_apply_go_mod<br/>解析 module/require]
-        Analyze --> ScanSrc[_scan_sources<br/>逐檔 gofmt + 字串掃描]
-        Analyze --> RunAST[_run_ast_helper]
-        RunAST --> Merge[_merge_ast_output]
-        Merge --> Metrics[_finalize_function_metrics]
-    end
-    subgraph GoAST["go_ast.go（go run）"]
-        WalkFS[filepath.Walk *.go] --> AnalyzeFile[analyzeFile]
-        AnalyzeFile --> UnusedImport[checkUnusedImport]
-        AnalyzeFile --> EmptyInterface[interface{} 偵測]
-        AnalyzeFile --> FuncInfo[analyzeFunction<br/>簽章 / 行數 / 巢狀深度]
-        AnalyzeFile --> Discarded[checkDiscardedReturn<br/>_ = f() 模式]
-        FuncInfo --> JSONOut[JSON stdout]
-        UnusedImport --> JSONOut
-        EmptyInterface --> JSONOut
-        Discarded --> JSONOut
-    end
-    RunAST -->|go run go_ast.go root| WalkFS
-    JSONOut -->|subprocess stdout| RunAST
-    ScanSrc --> Common[common.py<br/>detect_hardcoded_credentials<br/>detect_sql_injection<br/>detect_command_injection<br/>detect_commented_code]
-```
-
-## Module: analyze_python.py（Python 分析器）
-
-使用內建 `ast` 模組解析語法樹：`_NestingVisitor` 走訪 `If/For/While/Try/With` 節點計算巢狀深度，額外檢查未使用 import（比對 `ast.Name`／`ast.Attribute` 引用）與裸 `except:`。
-
-```mermaid
-graph TB
-    subgraph PyAnalyzer["analyze_python.py"]
-        Analyze[analyze] --> ParseFile[_analyze_file<br/>ast.parse]
-        ParseFile --> UnusedImp[_check_unused_imports]
-        ParseFile --> BareExcept[_check_bare_except]
-        ParseFile --> WalkFn[ast.walk FunctionDef]
-        WalkFn --> AnalyzeFn[_analyze_function]
-        AnalyzeFn --> LengthCheck[_check_function_length<br/>> 50 行]
-        AnalyzeFn --> NestVisitor[_NestingVisitor<br/>計算巢狀深度]
-        NestVisitor --> NestCheck[_check_function_nesting<br/>> 3 層]
-        ParseFile --> Common[common.py<br/>字串模式偵測]
+    subgraph Common[common.py]
+        C1[detect_hardcoded_credentials] --> C2{關鍵字命中?}
+        C2 -->|是| C3[Critical]
+        C1 --> C4[高熵候選字串]
+        C4 --> C5{entropy ≥ 4.0<br/>且非 UUID / 雜湊 / MIME?}
+        C5 -->|是| C6[High]
+        C7[detect_sql_injection] --> C8[High]
+        C9[detect_command_injection] --> C10[High]
+        C11[detect_commented_code<br/>≥ 10 行] --> C12[Low]
     end
 ```
-
-## Module: analyze_js_ts.py（JavaScript/TypeScript 分析器）
-
-先以 `_strip_noise` 遮蔽註解／字串／模板字面值（保留行數），再以 brace-matching 找出函式邊界與巢狀深度；`_find_eslint` 偵測專案本地 eslint，存在時執行並映射訊息為 `Issue`。
-
-```mermaid
-graph TB
-    subgraph JSAnalyzer["analyze_js_ts.py"]
-        Analyze[analyze] --> Strip[_strip_noise<br/>遮蔽註解/字串/模板]
-        Strip --> Extract[_extract_functions<br/>function / arrow / method pattern]
-        Extract --> MatchBrace[_match_braces<br/>brace pairs]
-        MatchBrace --> ScanNest[_scan_nesting<br/>_brace_kind 分類]
-        Analyze --> FindEslint[_find_eslint<br/>node_modules/.bin/eslint]
-        FindEslint -->|存在| RunEslint[_run_eslint --format json]
-        RunEslint --> MapMsg[_map_eslint_messages]
-        FindEslint -->|不存在| NoEslintIssue[Issue: eslint 不可用]
-        Analyze --> Common[common.py<br/>字串模式偵測]
-    end
-```
-
-## Module: common.py（共用型別與偵測器）
-
-提供 `Issue`／`FunctionInfo`／`CodeMetrics`／`ProjectAnalysis` dataclass，以及三個語言共用的字串模式偵測函式，供 Go／Python／JS-TS 分析器直接呼叫。
 
 ```mermaid
 classDiagram
@@ -169,73 +137,63 @@ classDiagram
         +int max_function_length
         +int max_nesting_depth
     }
-    ProjectAnalysis --> FunctionInfo
     ProjectAnalysis --> Issue
+    ProjectAnalysis --> FunctionInfo
     ProjectAnalysis --> CodeMetrics
 ```
 
-**共用偵測函式**：`detect_hardcoded_credentials`（關鍵字 + Shannon entropy）、`detect_sql_injection`、`detect_command_injection`、`detect_commented_code`。
+## Module: 建議篩選（Evaluate → Generate）
 
-## Data Flow
+```mermaid
+graph TB
+    subgraph Filter[建議篩選]
+        F1[issues + metrics] --> F2[規範比對<br/>所在目錄與父目錄的規範檔]
+        F2 --> F3[Validation Pass<br/>回原始碼確認錨點]
+        F3 -->|確認不了| Drop[移除]
+        F3 -->|確認| F4[Recommendation Principles]
+        F4 -->|包裝抽象 / 預測性 / 裝飾性<br/>linter 已涵蓋 / 已消音| Drop
+        F4 -->|通過| F5[寫入對應段落]
+    end
+```
 
-完整一次 `/code-reviewer` 呼叫的資料流：
+## 資料流
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant Claude as Claude Code
+    participant User as 使用者
+    participant Agent as Agent Harness
     participant Skill as SKILL.md
-    participant Entry as analyze_code.py
-    participant Lang as 語言分析器
-    participant FS as Filesystem
+    participant Py as analyze_code.py
+    participant Src as 目標專案
+    participant FS as .doc/code-reviewer/
 
-    User->>Claude: /code-reviewer [PROJECT_PATH] [OUTPUT_FILE]
-    Claude->>Skill: 載入 skill 定義
-    Skill->>Entry: analyze_code.py <project_path>
-    Entry->>Entry: detect_language
-    Entry->>Lang: _dispatch(lang, root)
-    alt Go
-        Lang->>FS: gofmt -s -w *.go
-        Lang->>Lang: go run go_ast.go <root>
-    else Python
-        Lang->>Lang: ast.parse 逐檔分析
-    else JS/TS
-        Lang->>FS: 偵測 node_modules/.bin/eslint
-        opt eslint 存在
-            Lang->>Lang: eslint . --format json
-        end
-    end
-    Lang-->>Entry: ProjectAnalysis
-    Entry-->>Skill: stdout JSON（issues / issue_counts / metrics）
-    Skill->>Skill: 套用 recommendation_principles.md 過濾建議
-    Skill->>Skill: 檢查 No-Op 條件
-    alt No-Op 命中且未指定 OUTPUT_FILE
-        Skill-->>User: 「無需處理」單行訊息
-    else 需要產檔
-        Skill->>FS: mkdir -p .doc/code-reviewer/
-        Skill->>FS: 寫入 {yyyy-MM-dd_HH-mm}.md
+    User->>Agent: /code-reviewer [PROJECT_PATH] [OUTPUT_FILE]
+    Agent->>Skill: 載入 skill 定義
+    Skill->>Py: python3 analyze_code.py <path>
+    Py->>Src: 掃描原始碼（Go 先 gofmt）
+    Py-->>Skill: issues / metrics JSON
+    Skill->>Src: 讀取規範檔、回原始碼驗證每條發現
+    alt 命中 No-Op 且未指定 OUTPUT_FILE
+        Skill-->>User: 一行無需處理訊息
+    else 有發現或指定 OUTPUT_FILE
+        Skill->>FS: 建立目錄並寫入報告
         Skill-->>User: 報告路徑
     end
 ```
 
-## No-Op 閘門狀態機
+## No-Op 狀態機
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CheckIssues: 分析完成
-    CheckIssues --> CheckMetrics: issue_counts 全為 0
-    CheckIssues --> WriteReport: issue_counts 有非 0 項
-    CheckMetrics --> CheckSuggestions: 無超標 metric
-    CheckMetrics --> WriteReport: 有超標 metric
-    CheckSuggestions --> NoOp: 架構/效能/安全三段皆無有效建議
-    CheckSuggestions --> WriteReport: 至少一段有有效建議
-    NoOp --> ForcedWrite: 使用者顯式指定 OUTPUT_FILE
-    NoOp --> SkipWrite: 未指定 OUTPUT_FILE
-    ForcedWrite --> [*]: 寫入最小報告
-    SkipWrite --> [*]: 僅輸出無需處理訊息
-    WriteReport --> [*]: 寫入完整報告
+    [*] --> Evaluated
+    Evaluated --> CheckIssues
+    CheckIssues --> Write: issue_counts 非 0
+    CheckIssues --> CheckSuggestions: 全為 0
+    CheckSuggestions --> Write: 任一段有有效建議
+    CheckSuggestions --> CheckMetrics: 四段皆無
+    CheckMetrics --> Write: 有超標 metric
+    CheckMetrics --> NoOp: 無超標
+    NoOp --> Write: 使用者指定 OUTPUT_FILE
+    NoOp --> [*]: 輸出一行訊息，不建目錄不寫檔
+    Write --> [*]: 寫入報告
 ```
-
-***
-
-©️ 2026

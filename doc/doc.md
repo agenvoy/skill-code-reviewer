@@ -4,52 +4,32 @@
 
 ## Prerequisites
 
-- [Claude Code](https://claude.ai/claude-code) CLI installed and configured
-- Python 3.10 or higher (uses the built-in `ast` module and modern generic syntax)
-- Go 1.21 or higher (optional, only needed for AST analysis of Go projects; falls back to string scanning otherwise)
-- Project-local `eslint` (optional, only needed for JS/TS lint-rule integration)
+- An agent harness that loads `SKILL.md` skills and can run shell commands
+- Python 3.10 or higher (the analyzers, plus `ast` analysis of Python projects)
+- Go 1.21 or higher (optional; runs the `go/ast` helper and `gofmt` for Go projects)
+- `node_modules/.bin/eslint` in the target project (optional; used for JS/TS projects)
+
+When a toolchain is missing, that language falls back to string scanning and the report says so.
 
 ## Installation
+
+`<skills-dir>` is the skill directory your harness scans.
 
 ### Clone from GitHub
 
 ```bash
-git clone https://github.com/pardnchiu/skill-code-reviewer.git \
-    ~/.claude/skills/code-reviewer
+git clone https://github.com/agenvoy/skill-code-reviewer.git \
+    <skills-dir>/code-reviewer
 ```
 
-### Manual Installation
+### Verify Installation
 
-Place the following files under `~/.claude/skills/code-reviewer/`:
-
-```
-code-reviewer/
-├── scripts/
-│   ├── analyze_code.py              # Entry point: language detection + dispatch
-│   ├── analyze_go.py                # Go analyzer
-│   ├── analyze_python.py            # Python analyzer
-│   ├── analyze_js_ts.py             # JavaScript/TypeScript analyzer
-│   ├── common.py                    # Shared types + detection utilities
-│   ├── go_ast.go                    # Go AST helper (invoked via go run)
-│   ├── analysis_categories.md       # Detection category / severity table
-│   ├── recommendation_principles.md # Hard rules for recommendation output
-│   └── output_format.md             # Report structure template
-├── SKILL.md
-├── LICENSE
-├── README.md
-└── doc/
-    ├── README.zh.md
-    ├── doc.md
-    ├── doc.zh.md
-    ├── architecture.md
-    └── architecture.zh.md
+```bash
+ls <skills-dir>/code-reviewer/SKILL.md
+ls <skills-dir>/code-reviewer/scripts/analyze_code.py
 ```
 
-Once installed, invoke `/code-reviewer` from Claude Code.
-
-## Configuration
-
-This skill requires no config file or environment variables — all behavior is driven by command arguments and the reference documents under `scripts/`, with no initialization step.
+Invoke it from your harness with `/code-reviewer`.
 
 ## Usage
 
@@ -59,133 +39,118 @@ This skill requires no config file or environment variables — all behavior is 
 /code-reviewer
 ```
 
-Analyzes the current working directory and writes the report to `.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md` (24-hour local timestamp, e.g. `2026-04-25_14-30.md`).
+Analyzes the current directory and writes `.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md` (24-hour local time), creating the directory if needed.
 
-### Specify Project Path
+### Target a Project
 
 ```bash
 /code-reviewer ./my-project
 ```
 
-Writes to `my-project/.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md`.
+Writes `my-project/.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md`.
 
-### Specify Output File (Explicit Override)
+### Set the Output File
 
 ```bash
 /code-reviewer . custom.md
 ```
 
-Writes directly to `./custom.md`, bypassing the default `.doc/code-reviewer/` path rule. An explicit output file is treated as a forced-write request — the report is written even when the No-Op condition is met (as a minimal "nothing to address" report).
+Writes straight to `./custom.md`; create any directory in the path first. An explicit output file forces a report, so a minimal one is written even when the no-op conditions hold.
 
-### Run the Analysis Script Manually
+### Nothing to Do
 
-```bash
-python3 ~/.claude/skills/code-reviewer/scripts/analyze_code.py /path/to/project
+```
+無需處理：python 專案 my-project（12 檔 / 48 函式）未觀察到可執行建議
 ```
 
-Outputs JSON containing `language`, `name`, `file_count`, `function_count`, `files`, `functions`, `issues`, `issue_counts`, `metrics`, and `dependencies` — useful for debugging or piping into other tooling.
+No `.doc/code-reviewer/` directory is created and no file is written.
+
+### Run the Analyzer Manually
+
+```bash
+python3 <skills-dir>/code-reviewer/scripts/analyze_code.py /path/to/project
+```
+
+Exits 1 when the argument is missing; prints `{"error": "Path does not exist: ..."}` when the path does not exist.
 
 ## CLI Reference
 
-### Command Parameters
+### Slash Command Arguments
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `PROJECT_PATH` | Current directory | Project root path |
-| `OUTPUT_FILE` | `.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md` | Output file path (relative to `PROJECT_PATH`) |
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `PROJECT_PATH` | Current directory | Project root |
+| `OUTPUT_FILE` | `.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md` | Output path relative to `PROJECT_PATH`; reports never land in the project root unless named explicitly |
 
-Both parameters are optional.
+### Language Detection
 
-### Output Path Rules
+Indicator files (`go.mod`, `tsconfig.json`, `package.json`, `pyproject.toml`) are checked first, then the most frequent source extension.
 
-| Scenario | Behavior |
-|------|------|
-| `OUTPUT_FILE` not specified | Writes to `{PROJECT_PATH}/.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md`, auto-creating the directory if missing |
-| `OUTPUT_FILE` explicitly specified | Uses that path directly; caller must ensure any containing directory exists |
-| Always | Never writes to the project root — all output is confined to `.doc/code-reviewer/` |
+| Language | Analysis | Dependency |
+|----------|----------|------------|
+| Go | `go run go_ast.go` + string scan; `gofmt -s -w` on non-test files first (failures silently skipped) | `go` ≥ 1.21 |
+| Python | Built-in `ast` | Python ≥ 3.10 |
+| JavaScript / TypeScript | Brace-based structural scan (function bounds, nesting depth) + project eslint (optional) + string scan | `node_modules/.bin/eslint` (optional) |
 
-### No-Op Condition
+Other languages return a single Low issue, "unsupported language".
 
-When all three of the following hold, the skill skips directory creation and file writes, emitting a single "nothing to do" line instead:
+### Analyzer Output JSON
 
-| Item | Condition |
-|------|------|
-| Issue counts | `issue_counts` critical / high / medium / low are all 0 |
-| Recommendation output | After applying the Recommendation Principles, the architecture / performance / security sections all have no actionable suggestions |
-| Metric thresholds | No metric exceeds its threshold (see the exception fields in `scripts/recommendation_principles.md`) |
-
-An explicitly specified `OUTPUT_FILE` is treated as a forced-write request — a minimal report is written even when the No-Op condition is met.
-
-### Supported Languages and Analyzers
-
-| Language | Analyzer | Dependencies |
-|----------|----------|--------------|
-| Go | `go/ast` (via a `go run go_ast.go` helper) + string scanning | `go` ≥ 1.21 |
-| Python | Built-in `ast` module | Python ≥ 3.10 |
-| JavaScript / TypeScript | Built-in brace-based structural scan (function boundaries / nesting depth) + project-local `eslint` (optional) + string scanning | `node_modules/.bin/eslint` (optional) |
-
-When the corresponding toolchain is unavailable, analysis automatically degrades to string scanning and is flagged in the report.
+| Field | Description |
+|-------|-------------|
+| `language` / `name` | Primary language and project name |
+| `file_count` / `function_count` | File and function counts |
+| `files` | Sorted file list |
+| `functions` | `name`, `signature`, `file`, `line`, `line_count`, `has_doc` |
+| `issues` | `severity`, `category`, `title`, `description`, `file`, `line`, `code_snippet`, `suggestion`; sorted by severity |
+| `issue_counts` | `critical` / `high` / `medium` / `low` counts |
+| `metrics` | `total_lines`, `code_lines`, `avg_function_length`, `max_function_length`, `max_nesting_depth` |
+| `dependencies` | Dependencies |
 
 ### Detection Categories
 
-| Category | Detection | Severity |
-|------|-----------|----------|
-| Long function | Function > 50 lines | Medium |
-| Deep nesting | Nesting depth > 3 levels | Medium |
-| Unused import | AST name-reference analysis | Low |
-| Large comment block | ≥ 10 consecutive single-line comments | Low |
-| Go: `interface{}` | AST detection of empty interfaces | Low |
-| Go: discarded return value | `_ = f()` pattern | Medium |
-| Python: bare except | `except:` with no type | Medium |
-| JS/TS: eslint rules | Invokes the project's eslint | High / Medium |
-| Hardcoded credential (keyword) | `password=`/`secret=`/`api_key=`, etc. | Critical |
-| Suspicious high-entropy string | Shannon entropy ≥ 4.0, length ≥ 32, excludes UUID/MD5/SHA1/SHA256/MIME type | High |
-| SQL Injection | String concatenation / f-string / % formatting into SQL | High |
-| Command Injection | Concatenating system commands | High |
+| Category | Issue | Criterion | Severity |
+|----------|-------|-----------|----------|
+| Quality | Long function | > 50 lines | Medium |
+| Quality | Deep nesting | > 3 levels | Medium |
+| Quality | Unused import | AST name references | Low |
+| Quality | Large comment block | ≥ 10 consecutive lines | Low |
+| Quality | Go `interface{}` | AST empty interface | Low |
+| Quality | Go discarded return | `_ = f()` | Medium |
+| Quality | Python bare except | `except:` | Medium |
+| Quality | JS/TS eslint rule | Project eslint | High / Medium |
+| Security | Hardcoded secret | `password=`, `secret=`, `api_key=`, etc. | Critical |
+| Security | Suspicious high-entropy string | Entropy ≥ 4.0, length ≥ 32, excluding UUID / MD5 / SHA1 / SHA256 / MIME type | High |
+| Security | SQL injection | Concatenated / f-string / `%`-formatted SQL | High |
+| Security | Command injection | Concatenated system commands | High |
 
-Full table: [`scripts/analysis_categories.md`](../scripts/analysis_categories.md).
-
-### Recommendation Output Restrictions
-
-The report's "architecture / performance / security" recommendation sections apply the following hard rules — any violating suggestion is removed rather than kept:
-
-| Anti-pattern | Description |
-|---|---|
-| Wrapping an existing abstraction | An existing `dataclass`/`NamedTuple`/`TypedDict`/`Enum` that is already a factory or constant set must not get a wrapper helper suggestion |
-| Documentation for its own sake | No blanket "add docstrings to all functions" suggestions |
-| Speculative optimization | No "when the project scales up" / "if more languages are supported" suggestions |
-| Decorative refactor | No "split into more small functions" suggestion without a concrete supporting metric |
-| Test-infrastructure expansion | No generic "add more tests" suggestion |
-| Severity inflation | Heuristic detections (pattern/entropy) are always flagged "needs manual confirmation," never escalated to Critical |
-
-Full rules and self-check list: [`scripts/recommendation_principles.md`](../scripts/recommendation_principles.md).
+Security checks are pattern-based, so high-severity hits are always marked for manual confirmation.
 
 ### Report Structure
 
-```markdown
-# {project_name} Optimization Report
+Summary, then Critical / High / Medium / Low issues, architecture, performance, security, convention adherence, and a to-do list. Each issue carries its file location, current state, current code, suggested change, and reason; convention findings add the rule file path and the verbatim rule. The convention section is omitted when the project has no `CLAUDE.md` / `AGENTS.md`.
 
-## Summary
-## Critical Issues
-## High Priority Issues
-## Medium Priority Issues
-## Low Priority Issues
-## Architecture Recommendations
-## Performance Recommendations
-## Security Recommendations
-## Task Checklist
-```
+### Convention Scope
 
-Full template: [`scripts/output_format.md`](../scripts/output_format.md).
+A file answers only to the rule files in its own directory and its parents:
 
-### analyze_code.py Arguments
+| File | Rule Files Checked |
+|------|--------------------|
+| `internal/note/new.go` | `internal/note/CLAUDE.md`, `internal/CLAUDE.md`, root `CLAUDE.md` (same for `AGENTS.md`) |
+| `page/view.ts` | Rule files in `page/` and the root; nothing under `internal/` applies |
 
-| Argument | Description |
-|----------|-------------|
-| `<project_path>` | Absolute or relative path to the project root to analyze |
+### Suggestion Rules
 
-Language detection order: `go.mod` → `tsconfig.json` → `package.json` → `pyproject.toml`/`setup.py`/`requirements.txt`/`Pipfile`; when none match, the extension with the most files wins.
+| Rule | Content |
+|------|---------|
+| Anchor | Every suggestion maps to an `issues` entry or a concrete file and line |
+| Validation | Re-checked against the source before writing; unconfirmed items are removed, not downgraded |
+| Forbidden | Wrapping existing abstractions, documentation for its own sake, speculative optimization, decorative refactors without a metric |
+| Skipped | Findings a linter already covers, trade-offs marked with `nolint` / `noqa` / a comment, issues that only hold for specific inputs |
+| Zero suggestions | A valid output; each section says nothing needs attention |
 
-***
+### No-Op Conditions (All Must Hold)
 
-©️ 2026
+1. Every `issue_counts` value is 0
+2. The architecture, performance, security, and convention sections have no actionable suggestion
+3. No metric exceeds its threshold

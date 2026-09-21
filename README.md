@@ -5,7 +5,7 @@
 ***
 
 <p align="center">
-  <strong>AST-DRIVEN CODE REVIEWS THAT SKIP THE NOISE!</strong>
+<strong>AST-DRIVEN CODE REVIEWS THAT SKIP THE NOISE!</strong>
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
 
 ***
 
-> A Claude Code skill that generates optimization reports for Go, Python, and JavaScript/TypeScript via AST analysis, entropy-based secret detection, and a no-op gate
+> An agent skill with AST-based multi-language analysis, per-finding source validation, and project convention checks
 
 ## Table of Contents
 
@@ -26,11 +26,11 @@
 
 > `/code-reviewer [PROJECT_PATH] [OUTPUT_FILE]` · [Documentation](./doc/doc.md)
 
-- **AST-Driven Multi-Language Analysis** — Go is parsed via a `go/ast` helper, Python via the built-in `ast` module, and JS/TS via a lightweight brace-based structural scan for functions and nesting depth; each degrades gracefully to string scanning when its toolchain is unavailable.
-- **Entropy-Based Secret Detection** — Beyond keyword matching, suspicious strings are scored with Shannon entropy and filtered against UUID/MD5/SHA1/SHA256/MIME-type patterns to cut false positives in credential detection.
-- **No-Op Gate** — When both issue counts and actionable recommendations are zero, the skill skips directory creation and file writes entirely, reporting a single "nothing to do" line instead of an empty report.
-- **Self-Checked Recommendation Principles** — `recommendation_principles.md` hard-bans wrapping existing abstractions, speculative optimizations, and decorative refactors — every suggestion must anchor to a real file and line number.
-- **Automatic Go Preprocessing** — Every non-test `.go` file is run through `gofmt -s -w` before analysis, silently skipped on failure so the pipeline never breaks.
+- **AST-Driven Multi-Language Analysis** — Go runs through a `go/ast` helper that attaches source snippets, Python uses the built-in `ast`, and JS/TS gets a structural scan plus the project's eslint, each degrading to string scanning when its toolchain is missing.
+- **Per-Finding Validation Pass** — Every issue and suggestion is re-checked against the source before it reaches the report, and anything unconfirmed is dropped rather than downgraded so false positives never erode trust in the rest.
+- **Project Convention Adherence** — Code is checked against the `CLAUDE.md` / `AGENTS.md` files in its own directory and parents, each violation quotes the rule verbatim, and trade-offs already marked with `nolint` or a comment are skipped.
+- **Entropy-Based Secret Detection** — Beyond keywords, suspicious strings are scored by Shannon entropy and filtered against UUID, hash, and MIME-type patterns to cut false positives in credential detection.
+- **No Report Without Findings** — With zero issues and no actionable suggestions, it creates no directory and writes no file, and suggestions themselves are barred from speculative or decorative content.
 
 ## Architecture
 
@@ -39,16 +39,15 @@
 ```mermaid
 graph TB
     User[User] -->|/code-reviewer| SKILL[SKILL.md<br/>Orchestration]
-    SKILL --> Analyze[analyze_code.py<br/>Language Detect + Dispatch]
+    SKILL --> Analyze[analyze_code.py<br/>Detect and Dispatch]
     Analyze --> Lang[Go / Python / JS-TS<br/>Analyzers]
-    Lang --> Gate[No-Op Gate]
-    Gate --> Output[.doc/code-reviewer/<br/>Optimization Report]
+    Lang --> JSON[issues / metrics JSON]
+    JSON --> Validate[Validation Pass<br/>+ Convention Check]
+    Validate --> Gate{No-Op?}
+    Gate -->|Yes| Msg[One-line no-op message]
+    Gate -->|No| Report[.doc/code-reviewer/ report]
 ```
 
 ## License
 
 This project is licensed under the [MIT LICENSE](LICENSE).
-
-***
-
-©️ 2026

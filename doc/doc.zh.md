@@ -4,52 +4,32 @@
 
 ## 前置需求
 
-- [Claude Code](https://claude.ai/claude-code) CLI 已安裝並設定
-- Python 3.10 或以上（使用內建 `ast` 模組與現代型別語法）
-- Go 1.21 或以上（選用，僅 Go 專案 AST 分析需要；不可用時自動降級為字串掃描）
-- 專案本地 `eslint`（選用，僅 JS/TS 專案 lint 規則整合需要）
+- 可載入 `SKILL.md` skill 並執行 shell 指令的 agent harness
+- Python 3.10 或更高版本（分析器與 Python 專案的 `ast` 分析）
+- Go 1.21 或更高版本（選用；分析 Go 專案時執行 `go/ast` 輔助程式與 `gofmt`）
+- 目標專案的 `node_modules/.bin/eslint`（選用；分析 JS/TS 專案時串接）
+
+工具鏈缺失時對應語言降級為字串掃描，並在報告中標示。
 
 ## 安裝
 
-### 從 GitHub Clone
+`<skills-dir>` 為所用 harness 掃描的 skill 目錄。
+
+### 從 GitHub 複製
 
 ```bash
-git clone https://github.com/pardnchiu/skill-code-reviewer.git \
-    ~/.claude/skills/code-reviewer
+git clone https://github.com/agenvoy/skill-code-reviewer.git \
+    <skills-dir>/code-reviewer
 ```
 
-### 手動安裝
+### 確認安裝
 
-將下列檔案放置於 `~/.claude/skills/code-reviewer/`：
-
-```
-code-reviewer/
-├── scripts/
-│   ├── analyze_code.py              # 進入點：語言偵測 + 分派
-│   ├── analyze_go.py                # Go 分析器
-│   ├── analyze_python.py            # Python 分析器
-│   ├── analyze_js_ts.py             # JavaScript/TypeScript 分析器
-│   ├── common.py                    # 共用型別與偵測工具
-│   ├── go_ast.go                    # Go AST helper（go run 執行）
-│   ├── analysis_categories.md       # 偵測類別與嚴重度對照
-│   ├── recommendation_principles.md # 建議產出硬性規則
-│   └── output_format.md             # 報告結構範本
-├── SKILL.md
-├── LICENSE
-├── README.md
-└── doc/
-    ├── README.zh.md
-    ├── doc.md
-    ├── doc.zh.md
-    ├── architecture.md
-    └── architecture.zh.md
+```bash
+ls <skills-dir>/code-reviewer/SKILL.md
+ls <skills-dir>/code-reviewer/scripts/analyze_code.py
 ```
 
-安裝完成後，於 Claude Code 中呼叫 `/code-reviewer` 即可使用。
-
-## 設定
-
-此 skill 無需任何設定檔或環境變數；所有行為由指令參數與 `scripts/` 下的參考文件控制，無需初始化步驟。
+安裝完成後，於 harness 中以 `/code-reviewer` 呼叫即可。
 
 ## 使用方式
 
@@ -59,133 +39,118 @@ code-reviewer/
 /code-reviewer
 ```
 
-分析當前工作目錄，報告寫入 `.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md`（24 小時制本地時間戳，例：`2026-04-25_14-30.md`）。
+分析當前目錄，報告寫入 `.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md`（24 小時制本地時間，目錄不存在時自動建立）。
 
-### 指定專案路徑
+### 指定專案
 
 ```bash
 /code-reviewer ./my-project
 ```
 
-輸出至 `my-project/.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md`。
+報告寫入 `my-project/.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md`。
 
-### 指定輸出檔案（顯式覆寫）
+### 指定輸出檔
 
 ```bash
 /code-reviewer . custom.md
 ```
 
-直接寫入 `./custom.md`，略過預設的 `.doc/code-reviewer/` 路徑規則。顯式指定輸出檔案時視為強制產檔請求，即使命中 No-Op 條件仍會寫入（內容為「未觀察到需處理事項」的最小報告）。
+直接寫入 `./custom.md`；路徑含目錄時需先自行建立。指定輸出檔視為強制產檔，即使命中 No-Op 條件也會寫入最小報告。
 
-### 手動執行分析腳本
+### 無需處理時
 
-```bash
-python3 ~/.claude/skills/code-reviewer/scripts/analyze_code.py /path/to/project
+```
+無需處理：python 專案 my-project（12 檔 / 48 函式）未觀察到可執行建議
 ```
 
-輸出 JSON，包含 `language`、`name`、`file_count`、`function_count`、`files`、`functions`、`issues`、`issue_counts`、`metrics`、`dependencies`，可用於除錯或串接其他工具。
+不建立 `.doc/code-reviewer/`，不寫入任何檔案。
+
+### 手動執行分析器
+
+```bash
+python3 <skills-dir>/code-reviewer/scripts/analyze_code.py /path/to/project
+```
+
+缺少參數時 exit 1；路徑不存在時輸出 `{"error": "Path does not exist: ..."}`。
 
 ## 命令列參考
 
-### 指令參數
+### Slash Command 參數
 
 | 參數 | 預設 | 說明 |
-|-----------|---------|-------------|
-| `PROJECT_PATH` | 當前目錄 | 專案根目錄路徑 |
-| `OUTPUT_FILE` | `.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md` | 輸出檔案路徑（相對於 `PROJECT_PATH`） |
+|------|------|------|
+| `PROJECT_PATH` | 當前目錄 | 專案根目錄 |
+| `OUTPUT_FILE` | `.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md` | 輸出路徑（相對於 `PROJECT_PATH`）；報告永不寫在專案根目錄，除非明確指定 |
 
-兩個參數皆為選填。
+### 語言偵測
 
-### 輸出路徑規則
+先比對指標檔（`go.mod`、`tsconfig.json`、`package.json`、`pyproject.toml`），無命中再依副檔名數量決定。
 
-| 情境 | 行為 |
+| 語言 | 分析方式 | 相依 |
+|------|----------|------|
+| Go | `go run go_ast.go` + 字串掃描；分析前對非測試檔執行 `gofmt -s -w`（失敗靜默略過） | `go` ≥ 1.21 |
+| Python | 內建 `ast` | Python ≥ 3.10 |
+| JavaScript / TypeScript | 大括號結構掃描（函式邊界、巢狀深度）+ 專案 eslint（選用）+ 字串掃描 | `node_modules/.bin/eslint`（選用） |
+
+其他語言回傳單一 Low 問題「不支援的語言」。
+
+### 分析器輸出 JSON
+
+| 欄位 | 說明 |
 |------|------|
-| 未指定 `OUTPUT_FILE` | 寫入 `{PROJECT_PATH}/.doc/code-reviewer/{yyyy-MM-dd_HH-mm}.md`，目錄不存在時自動建立 |
-| 顯式指定 `OUTPUT_FILE` | 直接使用該路徑；含目錄需自行確保存在 |
-| 任何情況 | 永遠不在專案根目錄落檔，所有產出集中於 `.doc/code-reviewer/` |
-
-### No-Op 條件
-
-同時滿足下列三項時，skip 建立目錄與寫檔，僅輸出一行「無需處理」訊息：
-
-| 項目 | 條件 |
-|------|------|
-| 問題計數 | `issue_counts` 的 critical / high / medium / low 皆為 0 |
-| 建議產出 | 套用 Recommendation Principles 後，架構／效能／安全三段皆無有效建議 |
-| Metric 超標 | 未觀察到超標 metric（見 `scripts/recommendation_principles.md` 例外欄位定義） |
-
-顯式指定 `OUTPUT_FILE` 時視為強制產檔請求，即使命中 No-Op 條件仍會寫入最小報告。
-
-### 支援語言與分析器
-
-| 語言 | 分析器 | 相依 |
-|----------|----------|--------------|
-| Go | `go/ast`（透過 `go run go_ast.go` helper）+ 字串掃描 | `go` ≥ 1.21 |
-| Python | 內建 `ast` 模組 | Python ≥ 3.10 |
-| JavaScript / TypeScript | 內建 brace-based 結構掃描（函式邊界／巢狀深度）+ 專案本地 `eslint`（可選）+ 字串掃描 | `node_modules/.bin/eslint`（可選） |
-
-對應工具鏈不可用時，自動降級為字串掃描並在報告中標示。
+| `language` / `name` | 主要語言與專案名稱 |
+| `file_count` / `function_count` | 檔案數與函式數 |
+| `files` | 檔案清單（排序） |
+| `functions` | `name`、`signature`、`file`、`line`、`line_count`、`has_doc` |
+| `issues` | `severity`、`category`、`title`、`description`、`file`、`line`、`code_snippet`、`suggestion`；依嚴重度排序 |
+| `issue_counts` | `critical` / `high` / `medium` / `low` 計數 |
+| `metrics` | `total_lines`、`code_lines`、`avg_function_length`、`max_function_length`、`max_nesting_depth` |
+| `dependencies` | 相依套件 |
 
 ### 偵測類別
 
-| 類別 | 偵測方式 | 嚴重度 |
-|------|-----------|----------|
-| 過長函式 | 函式 > 50 行 | Medium |
-| 過深巢狀 | 巢狀深度 > 3 層 | Medium |
-| 未使用 import | AST 名稱引用分析 | Low |
-| 大量連續註解 | ≥ 10 行連續單行註解 | Low |
-| Go: `interface{}` | AST 偵測空介面 | Low |
-| Go: 丟棄回傳值 | `_ = f()` 模式 | Medium |
-| Python: bare except | `except:` 無類型 | Medium |
-| JS/TS: eslint 規則 | 呼叫專案 eslint | High / Medium |
-| 硬編碼密鑰（關鍵字） | `password=`／`secret=`／`api_key=` 等 | Critical |
-| 可疑高熵字串 | Shannon entropy ≥ 4.0，長度 ≥ 32，排除 UUID／MD5／SHA1／SHA256／MIME type | High |
-| SQL Injection | 字串拼接／f-string／% 格式化 SQL | High |
-| Command Injection | 拼接系統指令 | High |
+| 類別 | 問題 | 判準 | 嚴重度 |
+|------|------|------|--------|
+| Quality | 過長函式 | > 50 行 | Medium |
+| Quality | 過深巢狀 | > 3 層 | Medium |
+| Quality | 未使用 import | AST 名稱引用 | Low |
+| Quality | 大量連續註解 | ≥ 10 行 | Low |
+| Quality | Go `interface{}` | AST 空介面 | Low |
+| Quality | Go 丟棄回傳值 | `_ = f()` | Medium |
+| Quality | Python bare except | `except:` | Medium |
+| Quality | JS/TS eslint 規則 | 專案 eslint | High／Medium |
+| Security | 硬編碼密鑰 | `password=`、`secret=`、`api_key=` 等 | Critical |
+| Security | 可疑高熵字串 | entropy ≥ 4.0、長度 ≥ 32，排除 UUID／MD5／SHA1／SHA256／MIME type | High |
+| Security | SQL Injection | 字串拼接／f-string／`%` 格式化 SQL | High |
+| Security | Command Injection | 拼接系統指令 | High |
 
-完整對照見 [`scripts/analysis_categories.md`](../scripts/analysis_categories.md)。
-
-### 建議產出禁止事項
-
-報告中的「架構建議／效能優化建議／安全性強化建議」段落套用下列硬性規則，違反者直接移除該建議：
-
-| 反模式 | 說明 |
-|---|---|
-| 包裝既有抽象 | 既有 `dataclass`／`NamedTuple`／`TypedDict`／`Enum` 已是 factory 或常數集合，禁止再建議 helper 包裝 |
-| 補文件為目的 | 禁止規模性建議「為所有函式補 docstring」 |
-| 預測性優化 | 禁止「未來規模增大時」「若支援更多語言時」這類建議 |
-| 裝飾性重構 | 禁止無具體指標佐證的「拆成更多小函式」建議 |
-| 測試基礎建設擴張 | 禁止泛泛建議「補測試」 |
-| 嚴重度膨脹 | Heuristic 偵測一律標註「需人工確認」，不得升級為 Critical |
-
-完整規則與自我檢查清單見 [`scripts/recommendation_principles.md`](../scripts/recommendation_principles.md)。
+Security 屬樣式比對，高嚴重度一律標註「需人工確認」。
 
 ### 報告結構
 
-```markdown
-# {project_name} 優化建議報告
+依序為摘要、Critical／High／Medium／Low 問題、架構建議、效能優化建議、安全性強化建議、規範遵循、待處理項目清單。每條問題含檔案位置、現況、目前程式碼、建議修改與原因；規範遵循另附規範檔路徑與逐字引用的原文。專案沒有 `CLAUDE.md`／`AGENTS.md` 時省略規範遵循段。
 
-## 摘要
-## Critical Issues
-## High Priority Issues
-## Medium Priority Issues
-## Low Priority Issues
-## 架構建議
-## 效能優化建議
-## 安全性強化建議
-## 待處理項目清單
-```
+### 規範遵循範圍
 
-完整範本見 [`scripts/output_format.md`](../scripts/output_format.md)。
+一個檔案只受所在目錄與各層父目錄的規範檔約束：
 
-### analyze_code.py 參數
+| 檔案 | 比對的規範檔 |
+|------|--------------|
+| `internal/note/new.go` | `internal/note/CLAUDE.md`、`internal/CLAUDE.md`、根目錄 `CLAUDE.md`（`AGENTS.md` 同理） |
+| `page/view.ts` | `page/` 與根目錄的規範檔；不受 `internal/` 下規範影響 |
 
-| 參數 | 說明 |
-|----------|-------------|
-| `<project_path>` | 待分析專案根目錄的絕對或相對路徑 |
+### 建議產出規則
 
-語言偵測順序：`go.mod` → `tsconfig.json` → `package.json` → `pyproject.toml`/`setup.py`/`requirements.txt`/`Pipfile`；皆不存在時依副檔名數量最多者判定。
+| 規則 | 內容 |
+|------|------|
+| 錨點 | 每條建議對應 `issues` 條目或明確的檔案與行號 |
+| 驗證 | 寫入前回原始碼確認；確認不了的移除，不降級 |
+| 禁止 | 包裝既有抽象、為補文件而補文件、預測性優化、無指標佐證的裝飾性重構 |
+| 不列 | linter 已涵蓋、已用 `nolint`／`noqa`／註解說明的取捨、只依賴特定輸入才成立的問題 |
+| 零建議 | 合法輸出；各段寫「目前未觀察到需處理事項」 |
 
-***
+### No-Op 條件（同時滿足時不產檔）
 
-©️ 2026
+1. `issue_counts` 全為 0
+2. 架構／效能／安全／規範遵循四段皆無有效建議
+3. 沒有超標 metric
